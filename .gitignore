@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 .vscode/
+.cache/
+.claude/
+.vscode-server/
 yolov8x.pt
 *.pt
 database/__pycache__/
