@@ -174,6 +174,32 @@ class CI4Client:
             logger.error(f"Failed to update model weights: {e}")
             return None
 
+    def get_classification(self, classification_id: str) -> Optional[Dict]:
+        """
+        Lädt einzelne Klassifizierung von CI4.
+
+        Args:
+            classification_id: UUID der Klassifizierung
+
+        Returns:
+            Classification dict oder None
+        """
+        if not self.enabled:
+            logger.debug("CI4 integration disabled, skipping get_classification")
+            return None
+
+        try:
+            response = self.session.get(
+                f"{self.base_url}/classifications/{classification_id}",
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get classification: {e}")
+            return None
+
     def health_check(self) -> bool:
         """
         Prüft ob CI4-API erreichbar ist.

@@ -22,8 +22,10 @@ from models.corner_detector import CornerDetector
 from models.ocr_analyzer import OCRAnalyzer
 from features.color_analyzer import ColorAnalyzer
 from features.line_analyzer import LineAnalyzer
+from features.feature_extractor import FeatureExtractor
 from database.ci4_client import ci4_client
 from database.schemas import FeedbackRequest
+from learning.feedback_processor import initialize_feedback_processor, feedback_processor
 
 app = FastAPI(title="Image Classification Service", version="2.0.0")
 
@@ -58,6 +60,7 @@ corner_detector = CornerDetector()
 ocr_analyzer = OCRAnalyzer()
 color_analyzer = ColorAnalyzer()
 line_analyzer = LineAnalyzer()
+feature_extractor = None  # Wird nach CLIP-Model-Loading initialisiert
 
 LABELS = ["document", "photo", "device type plate"]
 
@@ -300,12 +303,12 @@ async def classify_image(file: UploadFile = File(...)):
     return response
 
 # ----------------------------
-# FEEDBACK ENDPOINT (NEU)
+# FEEDBACK ENDPOINT (ENHANCED)
 # ----------------------------
 @app.post("/feedback")
 async def submit_feedback(feedback: FeedbackRequest):
     """
-    Nimmt User-Feedback entgegen.
+    Nimmt User-Feedback entgegen und triggert adaptives Learning.
 
     Body:
     {
@@ -315,6 +318,15 @@ async def submit_feedback(feedback: FeedbackRequest):
         "correction_reason": "...",
         "corrected_corners": [...]
     }
+
+    Returns:
+    {
+        "status": "success",
+        "message": "Feedback processed and weights adjusted",
+        "weights_updated": True/False,
+        "feedback_count": 51,
+        "current_accuracy": 0.87
+    }
     """
     if not ci4_client.enabled:
         return {
@@ -323,6 +335,7 @@ async def submit_feedback(feedback: FeedbackRequest):
         }
 
     try:
+        # Feedback-Data vorbereiten
         feedback_data = {
             "timestamp": datetime.now().isoformat(),
             "user_correction": {
@@ -333,15 +346,30 @@ async def submit_feedback(feedback: FeedbackRequest):
             "corrected_corners": feedback.corrected_corners
         }
 
-        result = ci4_client.store_feedback(
-            feedback.classification_id,
-            feedback_data
-        )
-
-        if result:
-            return {"status": "success", "message": "Feedback stored"}
+        # FeedbackProcessor verwenden (adaptives Learning)
+        if feedback_processor:
+            result = feedback_processor.process_feedback(
+                feedback.classification_id,
+                feedback_data
+            )
+            return result
         else:
-            return {"status": "error", "message": "Failed to store feedback"}
+            # Fallback: Nur in CI4 speichern (kein Learning)
+            result = ci4_client.store_feedback(
+                feedback.classification_id,
+                feedback_data
+            )
+
+            if result:
+                return {
+                    "status": "success",
+                    "message": "Feedback stored (learning disabled)"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Failed to store feedback"
+                }
 
     except Exception as e:
         return {
@@ -350,13 +378,108 @@ async def submit_feedback(feedback: FeedbackRequest):
         }
 
 # ----------------------------
+# SIMILAR IMAGES ENDPOINT (NEU)
+# ----------------------------
+@app.get("/similar/{classification_id}")
+async def get_similar_images(classification_id: str, limit: int = 10):
+    """
+    Findet ähnliche vergangene Klassifizierungen.
+
+    Args:
+        classification_id: UUID der Referenz-Klassifizierung
+        limit: Max Anzahl Ergebnisse (default: 10)
+
+    Returns:
+        {
+            "reference": {
+                "classification_id": "uuid",
+                "predicted": "typeplate",
+                "confidence": 0.87
+            },
+            "similar": [
+                {
+                    "classification_id": "uuid-2",
+                    "predicted": "typeplate",
+                    "similarity": 0.92,
+                    "distance": 0.08
+                },
+                ...
+            ]
+        }
+    """
+    if not ci4_client.enabled:
+        return {
+            "error": "CI4 integration disabled",
+            "similar": []
+        }
+
+    try:
+        # 1. Original-Klassifizierung von CI4 laden
+        original = ci4_client.get_classification(classification_id)
+
+        if not original:
+            return {
+                "error": "Classification not found",
+                "classification_id": classification_id
+            }
+
+        # 2. Features extrahieren (falls nicht in Original vorhanden)
+        features = original.get('features', {})
+
+        # 3. Ähnliche Bilder von CI4 abfragen
+        similar = ci4_client.find_similar_images(features, limit)
+
+        return {
+            "reference": {
+                "classification_id": classification_id,
+                "predicted": original.get('prediction', {}).get('class', 'unknown'),
+                "confidence": original.get('prediction', {}).get('confidence', 0.0)
+            },
+            "similar": similar
+        }
+
+    except Exception as e:
+        return {
+            "error": f"Similar images search failed: {str(e)}",
+            "similar": []
+        }
+
+# ----------------------------
+# LEARNING STATISTICS ENDPOINT (NEU)
+# ----------------------------
+@app.get("/learning/stats")
+async def get_learning_statistics():
+    """
+    Gibt Learning-Statistiken zurück.
+
+    Returns:
+        {
+            "total_feedback": 123,
+            "accuracy": 0.85,
+            "class_distribution": {...},
+            "confusion_matrix": {...},
+            "weights_version": 3
+        }
+    """
+    if feedback_processor:
+        stats = feedback_processor.get_learning_statistics()
+        return stats
+    else:
+        return {
+            "status": "disabled",
+            "message": "Learning system not initialized"
+        }
+
+# ----------------------------
 # STARTUP EVENT
 # ----------------------------
 @app.on_event("startup")
 async def startup_event():
     """Initialisierung beim Start."""
+    global feature_extractor, feedback_processor
+
     print("=" * 60)
-    print("Image Classification Service v2.0")
+    print("Image Classification Service v2.0 - Self-Learning Edition")
     print("=" * 60)
     print(f"✓ Config loaded: {config.VERSION}")
     print(f"✓ CLIP Model: {'Ready' if MODEL_READY else 'Not loaded'}")
@@ -364,6 +487,17 @@ async def startup_event():
     print(f"✓ Corner Detection: Hybrid (Contour + Harris)")
     print(f"✓ Color Analysis: LAB-based uniformity")
     print(f"✓ Line Analysis: Hough transform")
+
+    # Initialisiere FeatureExtractor und FeedbackProcessor
+    if MODEL_READY:
+        feature_extractor = FeatureExtractor(clip_model, processor)
+        feedback_processor = initialize_feedback_processor(clip_model, processor)
+        print("✓ Feature Extractor: Initialized")
+        print("✓ Adaptive Learning: Enabled")
+    else:
+        print("⚠ Feature Extractor: Disabled (CLIP model not loaded)")
+        print("⚠ Adaptive Learning: Disabled (CLIP model not loaded)")
+
     print("=" * 60)
 
     # Optional: Gewichte von CI4 laden
@@ -373,3 +507,5 @@ async def startup_event():
             print("✓ Loaded weights from CI4")
             config.update_weights(weights.get("weights", {}))
             config.update_thresholds(weights.get("thresholds", {}))
+        else:
+            print("⚠ No weights found in CI4, using defaults")
