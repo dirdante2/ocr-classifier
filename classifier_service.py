@@ -26,8 +26,12 @@ from features.feature_extractor import FeatureExtractor
 from database.ci4_client import ci4_client
 from database.schemas import FeedbackRequest
 from learning.feedback_processor import initialize_feedback_processor, feedback_processor
+from routers.config_api import router as config_router
 
 app = FastAPI(title="Image Classification Service", version="2.0.0")
+
+# Include configuration API router
+app.include_router(config_router, prefix="/config", tags=["configuration"])
 
 # ----------------------------
 # GLOBAL ERROR HANDLER

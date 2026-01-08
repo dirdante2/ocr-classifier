@@ -107,6 +107,9 @@ class ClassificationConfig:
         ]
     }
 
+    # Configuration API
+    CONFIG_API_KEY = os.getenv("CONFIG_API_KEY", "")
+
     # CI4 Integration
     CI4_CONFIG = {
         "base_url": os.getenv("CI4_BASE_URL", "http://localhost/api/v1"),

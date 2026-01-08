@@ -200,6 +200,62 @@ class CI4Client:
             logger.error(f"Failed to get classification: {e}")
             return None
 
+    def update_base_config(self, config_data: Dict) -> Optional[Dict]:
+        """
+        Speichert Basis-Konfiguration in CI4 (Config API only).
+        Separate from learning weights.
+
+        Args:
+            config_data: Base configuration dictionary
+
+        Returns:
+            Response dict oder None
+        """
+        if not self.enabled:
+            return None
+
+        try:
+            payload = {
+                "config": config_data,
+                "version": config.VERSION,
+                "updated_by": "config_api"
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/config/base",
+                json=payload,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to update base config in CI4: {e}")
+            return None
+
+    def get_base_config(self) -> Optional[Dict]:
+        """
+        Lädt Basis-Konfiguration von CI4.
+        Separate from learning weights.
+
+        Returns:
+            Base configuration dict oder None
+        """
+        if not self.enabled:
+            return None
+
+        try:
+            response = self.session.get(
+                f"{self.base_url}/config/base/latest",
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get base config from CI4: {e}")
+            return None
+
     def health_check(self) -> bool:
         """
         Prüft ob CI4-API erreichbar ist.
